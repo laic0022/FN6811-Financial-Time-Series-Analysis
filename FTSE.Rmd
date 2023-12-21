@@ -96,7 +96,7 @@ correlogram_data <- data.frame(
   P_Value = c(p_acf[-1])
 )
 
-head(correlogram_data)
+head(correlogram_data, 20)
 ```
 
 ```{r}
@@ -216,7 +216,7 @@ ArchTest(resid_squared)
 ```
 
 ```{r}
-spec <- ugarchspec(variance.model = list(model = "eGARCH", 
+spec <- ugarchspec(variance.model = list(model = "sGARCH", 
                                          garchOrder = c(1, 1), 
                                          submodel = NULL, 
                                          external.regressors = NULL, 
@@ -235,6 +235,8 @@ garch
 ```{r}
 hist(as.vector(residuals(garch)), breaks = 100)
 jarque.test(as.vector(residuals(garch)))
+res = data.frame(res = as.vector(residuals(garch)))
+write.csv(res, "res.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -289,15 +291,66 @@ spec <- ugarchspec(variance.model = list(model = "eGARCH",
                                          start.pars = list(), 
                                          fixed.pars = list()))
 
-garch <- ugarchfit(spec = spec, data = rtn$LogReturns, solver.control = list(trace=0),out.sample = as.integer(0.2 * nrow(rtn)))
+garch <- ugarchfit(spec = spec, data = rtn$LogReturns, solver.control = list(trace=0),out.sample = as.integer(0.2 * nrow(rtn)+1))
 garch
 ```
 
 ```{r}
-static_fc <- ugarchforecast(garch ,n.ahead =1, n.roll = as.integer(0.2 * nrow(rtn))-1)
-dynamic_fc <- ugarchforecast(garch, n.ahead = as.integer(0.2 * nrow(rtn)))
+static_fc <- ugarchforecast(garch ,n.ahead =1, n.roll = as.integer(0.2 * nrow(rtn)+1)-1)
+dynamic_fc <- ugarchforecast(garch, n.ahead = as.integer(0.2 * nrow(rtn)+1))
 ```
 
 ```{r}
-plot(static_fc, which = all)
+residuals <- residuals(garch)
+# Check for white noise in ARIMA-EGARCH residuals
+
+acf_result <- acf(residuals, alpha = 0.05, plot = FALSE)
+# Calculate confidence intervals for ACF
+ci_acf <- matrix(0, nrow = length(acf_result$acf) - 1, ncol = 2)
+ci_acf[, 1] <- -1.96 / sqrt(length(residuals))
+ci_acf[, 2] <- 1.96 / sqrt(length(residuals))
+
+# Calculate Q statistics and p-values using Box.test
+qstat_acf <- numeric(length(acf_result$lag))
+p_acf <- numeric(length(acf_result$lag))
+
+for (i in seq_along(qstat_acf)) {
+  test_result <- Box.test(residuals, lag = i, type = "Ljung-Box")
+  qstat_acf[i] <- test_result$statistic
+  p_acf[i] <- test_result$p.value
+}
+
+# Combine results into a data frame
+# Create a dataframe for plotting
+correlogram_residual2 <- data.frame(
+  Lag = c(1:(length(acf_result$acf)-1)),
+  ACF = c(acf_result$acf[-1]),
+  Q_Stat = c(qstat_acf[-1]),
+  P_Value = c(p_acf[-1])
+)
+
+
+# Display the first 20 rows
+head(correlogram_residual2, 20)
+```
+
+```{r}
+ArchTest(residuals)
+```
+
+```{r}
+
+forecast <- data.frame(Date = validation_set$Date, t(data.frame(static_fc@forecast$seriesFor)),
+                                                   (data.frame(dynamic_fc@forecast$seriesFor)),
+                                                   t(data.frame(static_fc@forecast$sigmaFor)),
+                                                   (data.frame(dynamic_fc@forecast$sigmaFor)))
+```
+
+```{r}
+plot(forecast, type = "l")
+```
+
+```{r}
+colnames(forecast) <- c("Date", "static_mean", "dynamic_mean", "static_sigma", "dynamic_sigma")
+write.csv(forecast, "forecase.csv", row.names = FALSE)
 ```
