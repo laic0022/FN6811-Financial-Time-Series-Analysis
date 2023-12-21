@@ -1,0 +1,303 @@
+```{r}
+library(conflicted)
+library(rugarch)
+# Load the readxl package
+library(readxl)
+library(tseries)
+library(caret)
+library(ggplot2)
+library(tidyverse)
+library(stats)
+library(lmtest)
+library(aTSA)
+library(FinTS)
+library(moments)
+
+adf.test <- tseries::adf.test
+kpss.test <- tseries::kpss.test
+```
+
+```{r}
+# Specify the path to your Excel file
+excel_file_path <- "FTSE_Aug2010_Nov_2023.xlsx"
+
+# Read the Excel file into a data frame
+data <- read_excel(excel_file_path)
+rtn <- diff(log(data[["Adj Price"]])) * 100
+rtn <- data.frame(Date = data$Date[-1], LogReturns = rtn)
+
+# Display the first few rows of the resulting dataframe
+head(rtn)
+```
+
+```{r}
+# Create an index vector for the training set without shuffling
+training_indices <- seq(1, 0.8 * nrow(rtn))
+
+# Split the dataset into training and validation sets
+training_set <- rtn[training_indices, ]
+validation_set <- rtn[-training_indices, ]
+
+# Display the dimensions of the resulting datasets
+cat("Training set size:", nrow(training_set), "\n")
+cat("Validation set size:", nrow(validation_set), "\n")
+```
+
+```{r}
+# Perform the ADF test
+adf_result <- adf.test(training_set$LogReturns)
+
+# Display the ADF test results
+print(adf_result)
+```
+
+```{r}
+# Perform the KPSS test
+kpss_result <- kpss.test(training_set$LogReturns)
+
+# Display the KPSS test results
+print(kpss_result)
+```
+
+```{r}
+# Autocorrelation analysis
+acf_result <- acf(training_set$LogReturns, alpha = 0.05, plot = FALSE)
+# Calculate confidence intervals for ACF
+ci_acf <- matrix(0, nrow = length(acf_result$acf) - 1, ncol = 2)
+ci_acf[, 1] <- -1.96 / sqrt(length(training_set))
+ci_acf[, 2] <- 1.96 / sqrt(length(training_set))
+
+# Calculate Q statistics and p-values using Box.test
+qstat_acf <- numeric(length(acf_result$lag))
+p_acf <- numeric(length(acf_result$lag))
+
+for (i in seq_along(qstat_acf)) {
+  test_result <- Box.test(training_set$LogReturns, lag = i, type = "Ljung-Box")
+  qstat_acf[i] <- test_result$statistic
+  p_acf[i] <- test_result$p.value
+}
+
+# Partial autocorrelation analysis
+pacf_result <- pacf(training_set$LogReturns, alpha = 0.05, plot = FALSE)
+# Calculate confidence intervals for PACF
+ci_pacf <- matrix(0, nrow = length(pacf_result$acf) - 1, ncol = 2)
+ci_pacf[, 1] <- -1.96 / sqrt(length(training_set))
+ci_pacf[, 2] <- 1.96 / sqrt(length(training_set))
+pacf <- pacf_result$acf
+```
+
+```{r}
+# Create a dataframe for plotting
+correlogram_data <- data.frame(
+  Lag = c(1:(length(acf_result$acf) - 1)),
+  ACF = c(acf_result$acf[-1]),
+  PACF = c(pacf_result$acf),
+  Q_Stat = c(qstat_acf[-1]),
+  P_Value = c(p_acf[-1])
+)
+
+head(correlogram_data)
+```
+
+```{r}
+# Plot ACF
+ggplot(correlogram_data, aes(x = Lag, y = ACF)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.7) +
+  labs(title = "Autocorrelation Function (ACF)",
+       x = "Lag",
+       y = "ACF") +
+  geom_hline(yintercept = ci_acf[1, ], linetype = "dashed", color = "red") +
+  geom_hline(yintercept = ci_acf[2, ], linetype = "dashed", color = "red") +
+  theme_minimal()
+```
+
+```{r}
+# Fit ARIMA model in R
+arima_model <- arima(training_set$LogReturns, order = c(5, 0, 3))
+# Summary of the ARIMA model
+AIC(arima_model)
+BIC(arima_model)
+```
+
+```{r}
+# Assuming your training_set is a time series object in R (e.g., ts or zoo)
+# If not, you may need to convert it to a time series object using the appropriate function
+# Initialize lists to store models, information criteria, and lag values
+models <- list()
+ic <- matrix(nrow = 0, ncol = 2, dimnames = list(NULL, c("AIC", "BIC")))
+lag <- matrix(nrow = 0, ncol = 2, dimnames = list(NULL, c("p", "q")))
+
+# Loop over different orders (p, d, q)
+for (p in 0:10) {
+  for (q in 0:10) {
+    # Fit ARIMA model
+    arima_model <- arima(training_set$LogReturns, order = c(p, 0, q))
+
+    # Store the model
+    models[[paste("arma(", p, ",", q, ")", sep = "")]] <- arima_model
+    
+    # Collect information criteria
+    ic_row <- c(AIC(arima_model), BIC(arima_model))
+    ic <- rbind(ic, ic_row)
+    
+    # Store lag values
+    lag_row <- c(p, q)
+    lag <- rbind(lag, lag_row)
+  }
+  cat(p, "\n")
+}
+
+# Convert the matrices to data frames
+ic_df <- data.frame(ic, stringsAsFactors = FALSE)
+lag_df <- data.frame(lag, stringsAsFactors = FALSE)
+
+# Add column names
+colnames(ic_df) <- c("AIC", "BIC")
+colnames(lag_df) <- c("p", "q")
+
+# Combine lag and information criteria data frames
+result_df <- cbind(lag_df, ic_df)
+
+# Display the result
+head(result_df)
+```
+
+```{r}
+# Sort result_df by AIC
+result_df_sorted <- result_df[order(result_df$AIC), ]
+
+# Display the sorted DataFrame
+print(head(result_df_sorted))
+```
+
+```{r}
+best_mean_equation <- arima(training_set$LogReturns, order = c(5, 0, 7))
+best_mean_equation_table <- coeftest(best_mean_equation)
+```
+
+```{r}
+# Check for ARCH effects in ARIMA residuals
+residuals <- residuals(best_mean_equation)
+# Assuming resid is your squared residuals
+resid_squared <- residuals^2
+
+acf_result <- acf(resid_squared, alpha = 0.05, plot = FALSE)
+# Calculate confidence intervals for ACF
+ci_acf <- matrix(0, nrow = length(acf_result$acf) - 1, ncol = 2)
+ci_acf[, 1] <- -1.96 / sqrt(length(resid_squared))
+ci_acf[, 2] <- 1.96 / sqrt(length(resid_squared))
+
+# Calculate Q statistics and p-values using Box.test
+qstat_acf <- numeric(length(acf_result$lag))
+p_acf <- numeric(length(acf_result$lag))
+
+for (i in seq_along(qstat_acf)) {
+  test_result <- Box.test(resid_squared, lag = i, type = "Ljung-Box")
+  qstat_acf[i] <- test_result$statistic
+  p_acf[i] <- test_result$p.value
+}
+
+# Combine results into a data frame
+# Create a dataframe for plotting
+correlogram_residual2 <- data.frame(
+  Lag = c(1:(length(acf_result$acf)-1)),
+  ACF = c(acf_result$acf[-1]),
+  Q_Stat = c(qstat_acf[-1]),
+  P_Value = c(p_acf[-1])
+)
+
+
+# Display the first 20 rows
+head(correlogram_residual2, 20)
+```
+
+```{r}
+ArchTest(resid_squared)
+```
+
+```{r}
+spec <- ugarchspec(variance.model = list(model = "eGARCH", 
+                                         garchOrder = c(1, 1), 
+                                         submodel = NULL, 
+                                         external.regressors = NULL, 
+                                         variance.targeting = FALSE), 
+
+                   mean.model     = list(armaOrder = c(5, 7), 
+                                         external.regressors = NULL, 
+                                         distribution.model = "norm", 
+                                         start.pars = list(), 
+                                         fixed.pars = list()))
+
+garch <- ugarchfit(spec = spec, data = training_set$LogReturns, solver.control = list(trace=0))
+garch
+```
+
+```{r}
+hist(as.vector(residuals(garch)), breaks = 100)
+jarque.test(as.vector(residuals(garch)))
+```
+
+```{r}
+residuals <- residuals(garch)
+# Check for ARCH effects in ARIMA-GARCH residuals
+# Assuming resid is your squared residuals
+resid_squared <- scale(residuals)^2
+
+acf_result <- acf(resid_squared, alpha = 0.05, plot = FALSE)
+# Calculate confidence intervals for ACF
+ci_acf <- matrix(0, nrow = length(acf_result$acf) - 1, ncol = 2)
+ci_acf[, 1] <- -1.96 / sqrt(length(resid_squared))
+ci_acf[, 2] <- 1.96 / sqrt(length(resid_squared))
+
+# Calculate Q statistics and p-values using Box.test
+qstat_acf <- numeric(length(acf_result$lag))
+p_acf <- numeric(length(acf_result$lag))
+
+for (i in seq_along(qstat_acf)) {
+  test_result <- Box.test(resid_squared, lag = i, type = "Ljung-Box")
+  qstat_acf[i] <- test_result$statistic
+  p_acf[i] <- test_result$p.value
+}
+
+# Combine results into a data frame
+# Create a dataframe for plotting
+correlogram_residual2 <- data.frame(
+  Lag = c(1:(length(acf_result$acf)-1)),
+  ACF = c(acf_result$acf[-1]),
+  Q_Stat = c(qstat_acf[-1]),
+  P_Value = c(p_acf[-1])
+)
+
+
+# Display the first 20 rows
+head(correlogram_residual2, 20)
+```
+
+```{r}
+ArchTest(scale(residuals)^2)
+```
+```{r}
+spec <- ugarchspec(variance.model = list(model = "eGARCH", 
+                                         garchOrder = c(1, 1), 
+                                         submodel = NULL, 
+                                         external.regressors = NULL, 
+                                         variance.targeting = FALSE), 
+
+                   mean.model     = list(armaOrder = c(5, 7), 
+                                         external.regressors = NULL, 
+                                         distribution.model = "norm", 
+                                         start.pars = list(), 
+                                         fixed.pars = list()))
+
+garch <- ugarchfit(spec = spec, data = rtn$LogReturns, solver.control = list(trace=0),out.sample = as.integer(0.2 * nrow(rtn)))
+garch
+```
+
+```{r}
+static_fc <- ugarchforecast(garch ,n.ahead =1, n.roll = as.integer(0.2 * nrow(rtn))-1)
+dynamic_fc <- ugarchforecast(garch, n.ahead = as.integer(0.2 * nrow(rtn)))
+```
+
+```{r}
+plot(static_fc, which = all)
+```
