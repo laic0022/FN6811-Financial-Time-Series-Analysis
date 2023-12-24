@@ -12,6 +12,8 @@ library(lmtest)
 library(aTSA)
 library(FinTS)
 library(moments)
+require(xts)
+
 
 adf.test <- tseries::adf.test
 kpss.test <- tseries::kpss.test
@@ -25,7 +27,8 @@ excel_file_path <- "FTSE_Aug2010_Nov_2023.xlsx"
 data <- read_excel(excel_file_path)
 rtn <- diff(log(data[["Adj Price"]])) * 100
 rtn <- data.frame(Date = data$Date[-1], LogReturns = rtn)
-
+time <- rtn$Date
+rtn <- na.omit(xts(x = rtn, order.by = time))
 # Display the first few rows of the resulting dataframe
 head(rtn)
 ```
@@ -360,4 +363,8 @@ newsimpact(garch)
 ```{r}
 res <- data.frame(res = as.vector(residuals))
 write.csv(res, "res.csv", row.names = FALSE)
+```
+```{r}
+garch@fit$seriesData
+# ugarchforecast(garch, data = rtn$LogReturns, n.ahead = 10)
 ```
